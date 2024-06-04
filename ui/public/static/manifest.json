@@ -1,6 +1,6 @@
 {
-  "short_name": "WiFi Connect",
-  "name": "Easy WiFi setup for Linux devices from your mobile phone or laptop",
+  "short_name": "GaitQ WiFi Connect",
+  "name": "Easy WiFi setup for GaitQ device from your mobile phone or laptop",
   "icons": [
     {
       "src": "favicon.png",
@@ -10,6 +10,6 @@
   ],
   "start_url": ".",
   "display": "standalone",
-  "theme_color": "#000000",
+  "theme_color": "#E5554F",
   "background_color": "#ffffff"
 }

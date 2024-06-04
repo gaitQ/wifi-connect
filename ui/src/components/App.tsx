@@ -4,6 +4,7 @@ import { Navbar, Provider, Container } from 'rendition';
 import { NetworkInfoForm } from './NetworkInfoForm';
 import { Notifications } from './Notifications';
 import { createGlobalStyle } from 'styled-components';
+import styled from 'styled-components';
 
 const GlobalStyle = createGlobalStyle`
 	body {
@@ -18,6 +19,12 @@ const GlobalStyle = createGlobalStyle`
 	code {
 		font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
 	}
+`;
+
+// Set colors for Navbar component
+const StyledNavbar = styled(Navbar)`
+	background-color: #e5554f;
+	color: white; // text color
 `;
 
 export interface NetworkInfo {
@@ -81,7 +88,9 @@ const App = () => {
 	return (
 		<Provider>
 			<GlobalStyle />
-			<Navbar brand={<img src={logo} style={{ height: 30 }} alt="logo" />} />
+			<StyledNavbar
+				brand={<img src={logo} style={{ height: 30 }} alt="logo" />}
+			/>
 
 			<Container>
 				<Notifications

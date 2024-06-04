@@ -86,8 +86,13 @@ export const NetworkInfoForm = ({
 			mt={5}
 		>
 			<Heading.h3 align="center" mb={4}>
-				Hi! Please choose your WiFi from the list
+				Please choose your WiFi from the list
 			</Heading.h3>
+			<Heading.h4 align="center" mb={4}>
+				If your WiFi is not shown in the list, ensure your router is turned on
+				and in range. Then Press the button below to reload the list. You will
+				have to reconnect to the gaitq-ded-* WiFi again.
+			</Heading.h4>
 
 			<Form
 				width={['100%', '80%', '60%', '40%']}
@@ -103,6 +108,11 @@ export const NetworkInfoForm = ({
 					mx: '20%',
 					mt: 3,
 					disabled: availableNetworks.length <= 0,
+					style: {
+						background: '#e5554f',
+						opacity: availableNetworks.length > 0 ? '1' : '0.6',
+						color: 'white',
+					},
 				}}
 				submitButtonText={'Connect'}
 			/>
