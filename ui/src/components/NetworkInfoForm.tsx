@@ -1,7 +1,7 @@
 import type { JSONSchema7 as JSONSchema } from 'json-schema';
 import * as React from 'react';
 import type { RenditionUiSchema } from 'rendition';
-import { Flex, Form, Heading } from 'rendition';
+import { Flex, Form, Heading, Button } from 'rendition';
 import type { Network, NetworkInfo } from './App';
 
 const getSchema = (availableNetworks: Network[]): JSONSchema => ({
@@ -64,11 +64,13 @@ const isEnterpriseNetwork = (
 interface NetworkInfoFormProps {
 	availableNetworks: Network[];
 	onSubmit: (data: NetworkInfo) => void;
+	onRestartButtonClick: () => void;
 }
 
 export const NetworkInfoForm = ({
 	availableNetworks,
 	onSubmit,
+	onRestartButtonClick,
 }: NetworkInfoFormProps) => {
 	const [data, setData] = React.useState<NetworkInfo>({});
 
@@ -93,6 +95,17 @@ export const NetworkInfoForm = ({
 				and in range. Then Press the button below to reload the list. You will
 				have to reconnect to the gaitq-ded-* WiFi again.
 			</Heading.h4>
+			<Button
+				onClick={onRestartButtonClick}
+				mb={4}
+				style={{
+					background: '#e5554f',
+					color: 'white',
+					border: '0',
+				}}
+			>
+				Reload WiFi List
+			</Button>
 
 			<Form
 				width={['100%', '80%', '60%', '40%']}

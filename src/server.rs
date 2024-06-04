@@ -152,6 +152,7 @@ pub fn start_server(
     router.get("/", Static::new(ui_directory), "index");
     router.get("/networks", networks, "networks");
     router.post("/connect", connect, "connect");
+    router.post("/restart", restart, "restart");
 
     let mut assets = Mount::new();
     assets.mount("/", router);
@@ -177,6 +178,7 @@ pub fn start_server(
             ErrorKind::StartHTTPServer(address, e.to_string()).into(),
         );
     }
+    info!("Stopping HTTP server");
 }
 
 fn networks(req: &mut Request) -> IronResult<Response> {
@@ -224,6 +226,18 @@ fn connect(req: &mut Request) -> IronResult<Response> {
 
     if let Err(e) = request_state.network_tx.send(command) {
         exit_with_error(&request_state, e, ErrorKind::SendNetworkCommandConnect)
+    } else {
+        Ok(Response::with(status::Ok))
+    }
+}
+
+fn restart(req: &mut Request) -> IronResult<Response> {
+    info!("User requested restart of the captive portal");
+
+    let request_state = get_request_state!(req);
+
+    if let Err(e) = request_state.network_tx.send(NetworkCommand::RestartApp) {
+        exit_with_error(&request_state, e, ErrorKind::RestartCommand)
     } else {
         Ok(Response::with(status::Ok))
     }

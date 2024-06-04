@@ -41,6 +41,7 @@ export interface Network {
 const App = () => {
 	const [attemptedConnect, setAttemptedConnect] = React.useState(false);
 	const [isFetchingNetworks, setIsFetchingNetworks] = React.useState(true);
+	const [RestartingApp, setRestartingApp] = React.useState(false);
 	const [error, setError] = React.useState('');
 	const [availableNetworks, setAvailableNetworks] = React.useState<Network[]>(
 		[],
@@ -85,11 +86,31 @@ const App = () => {
 			});
 	};
 
+	const RestartApp = () => {
+		setRestartingApp(true);
+		setError('');
+
+		fetch('/restart', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+		})
+			.then((resp) => {
+				if (resp.status !== 200) {
+					throw new Error(resp.statusText);
+				}
+			})
+			.catch((e: Error) => {
+				setError(`Failed to restart. ${e.message || e}`);
+			});
+	};
+
 	return (
 		<Provider>
 			<GlobalStyle />
 			<StyledNavbar
-				brand={<img src={logo} style={{ height: 30 }} alt="logo" />}
+				brand={<img src={logo} style={{ height: 50 }} alt="logo" />}
 			/>
 
 			<Container>
@@ -98,11 +119,13 @@ const App = () => {
 					hasAvailableNetworks={
 						isFetchingNetworks || availableNetworks.length > 0
 					}
+					RestartingApp={RestartingApp}
 					error={error}
 				/>
 				<NetworkInfoForm
 					availableNetworks={availableNetworks}
 					onSubmit={onConnect}
+					onRestartButtonClick={RestartApp}
 				/>
 			</Container>
 		</Provider>

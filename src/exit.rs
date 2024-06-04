@@ -4,7 +4,9 @@ use nix::sys::signal::{SigSet, SIGHUP, SIGINT, SIGQUIT, SIGTERM};
 
 use errors::*;
 
-pub type ExitResult = Result<()>;
+use network::NetworkCommand;
+
+pub type ExitResult = Result<Option<NetworkCommand>>;
 
 pub fn exit(exit_tx: &Sender<ExitResult>, error: Error) {
     let _ = exit_tx.send(Err(error));

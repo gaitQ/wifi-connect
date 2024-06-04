@@ -42,7 +42,7 @@ use std::thread;
 use config::get_config;
 use errors::*;
 use exit::block_exit_signals;
-use network::{init_networking, process_network_commands};
+use network::{init_networking, process_network_commands, NetworkCommand};
 use privileges::require_root;
 
 fn main() {
@@ -69,20 +69,35 @@ fn run() -> Result<()> {
 
     require_root()?;
 
-    init_networking(&config)?;
-
     let (exit_tx, exit_rx) = channel();
-
     thread::spawn(move || {
         process_network_commands(&config, &exit_tx);
     });
 
-    match exit_rx.recv() {
-        Ok(result) => result?,
-        Err(e) => {
-            return Err(e.into());
+    loop {
+        debug!("Restarting main loop: Init networking");
+        init_networking(&get_config())?;
+
+        match exit_rx.recv() {
+            Ok(result) => match result {
+                Ok(command) => match command.unwrap() {
+                    NetworkCommand::Activate => error!("Exit due to activate"),
+                    NetworkCommand::Timeout => debug!("Exit due to timeout"),
+                    NetworkCommand::Exit => {
+                        return Ok(());
+                    }
+                    NetworkCommand::Connect { .. } => {
+                        return Ok(());
+                    }
+                    NetworkCommand::RestartApp => debug!("User restarted app"),
+                },
+                Err(e) => {
+                    return Err(e.into());
+                }
+            },
+            Err(e) => {
+                return Err(e.into());
+            }
         }
     }
-
-    Ok(())
 }

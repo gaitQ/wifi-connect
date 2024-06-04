@@ -1,4 +1,4 @@
-FROM balenalib/amd64-debian
+FROM debian:latest
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \

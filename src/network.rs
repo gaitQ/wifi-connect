@@ -16,6 +16,7 @@ use errors::*;
 use exit::{exit, trap_exit_signals, ExitResult};
 use server::start_server;
 
+#[derive(Debug, PartialEq, Clone)]
 pub enum NetworkCommand {
     Activate,
     Timeout,
@@ -25,6 +26,7 @@ pub enum NetworkCommand {
         identity: String,
         passphrase: String,
     },
+    RestartApp,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -43,7 +45,7 @@ struct NetworkCommandHandler {
     access_points: Vec<AccessPoint>,
     portal_connection: Option<Connection>,
     config: Config,
-    dnsmasq: process::Child,
+    dnsmasq: Option<process::Child>,
     server_tx: Sender<NetworkCommandResponse>,
     network_rx: Receiver<NetworkCommand>,
     activated: bool,
@@ -64,7 +66,7 @@ impl NetworkCommandHandler {
 
         let portal_connection = Some(create_portal(&device, config)?);
 
-        let dnsmasq = start_dnsmasq(config, &device)?;
+        let dnsmasq = Some(start_dnsmasq(config, &device)?);
 
         let (server_tx, server_rx) = channel();
 
@@ -145,28 +147,38 @@ impl NetworkCommandHandler {
         });
     }
 
-    fn run(&mut self, exit_tx: &Sender<ExitResult>) {
-        let result = self.run_loop();
-        self.stop(exit_tx, result);
-    }
+    fn run(&mut self, exit_tx: &Sender<ExitResult>) -> ExitResult {
+        self.activated = false;
 
-    fn run_loop(&mut self) -> ExitResult {
+        if self.portal_connection.is_none() {
+            self.access_points = get_access_points(&self.device)?;
+            self.portal_connection = Some(create_portal(&self.device, &self.config)?);
+        }
+
+        if self.dnsmasq.is_none() {
+            self.dnsmasq = Some(start_dnsmasq(&self.config, &self.device)?);
+        };
+
         loop {
             let command = self.receive_network_command()?;
+            let result = Ok(Some(command.clone()));
+            let return_result = Ok(Some(command.clone()));
 
             match command {
                 NetworkCommand::Activate => {
-                    self.activate()?;
+                    self.activate_portal()?;
                 }
                 NetworkCommand::Timeout => {
                     if !self.activated {
                         info!("Timeout reached. Exiting...");
-                        return Ok(());
+                        self.stop(exit_tx, result);
+                        return return_result;
                     }
                 }
                 NetworkCommand::Exit => {
                     info!("Exiting...");
-                    return Ok(());
+                    self.stop(exit_tx, result);
+                    return return_result;
                 }
                 NetworkCommand::Connect {
                     ssid,
@@ -174,8 +186,14 @@ impl NetworkCommandHandler {
                     passphrase,
                 } => {
                     if self.connect(&ssid, &identity, &passphrase)? {
-                        return Ok(());
+                        self.stop(exit_tx, result);
+                        return return_result;
                     }
+                }
+                NetworkCommand::RestartApp => {
+                    info!("Restarting...");
+                    self.stop(exit_tx, result);
+                    return return_result;
                 }
             }
         }
@@ -193,16 +211,22 @@ impl NetworkCommandHandler {
     }
 
     fn stop(&mut self, exit_tx: &Sender<ExitResult>, result: ExitResult) {
-        let _ = stop_dnsmasq(&mut self.dnsmasq);
-
-        if let Some(ref connection) = self.portal_connection {
-            let _ = stop_portal_impl(connection, &self.config);
+        // Only stop dnsmasq if not restarting the app
+        if let Ok(Some(ref network_command)) = result {
+            // TODO consider other exit codes? e.g. timeout
+            if *network_command != NetworkCommand::RestartApp {
+                info!("Stopping dnsmasq");
+                let _ = stop_dnsmasq(&mut self.dnsmasq);
+            }
         }
+
+        debug!("Stopping network command_handler");
+        let _ = stop_portal(&mut self.portal_connection, &self.config);
 
         let _ = exit_tx.send(result);
     }
 
-    fn activate(&mut self) -> ExitResult {
+    fn activate_portal(&mut self) -> Result<()> {
         self.activated = true;
 
         let networks = get_networks(&self.access_points);
@@ -215,11 +239,7 @@ impl NetworkCommandHandler {
     fn connect(&mut self, ssid: &str, identity: &str, passphrase: &str) -> Result<bool> {
         delete_existing_connections_to_same_network(&self.manager, ssid);
 
-        if let Some(ref connection) = self.portal_connection {
-            stop_portal(connection, &self.config)?;
-        }
-
-        self.portal_connection = None;
+        stop_portal(&mut self.portal_connection, &self.config)?;
 
         self.access_points = get_access_points(&self.device)?;
 
@@ -304,7 +324,27 @@ pub fn process_network_commands(config: &Config, exit_tx: &Sender<ExitResult>) {
         }
     };
 
-    command_handler.run(exit_tx);
+    loop {
+        debug!("Starting network command_handler");
+        let result = command_handler.run(exit_tx);
+
+        match result {
+            Ok(command) => match command.unwrap() {
+                NetworkCommand::Activate => error!("Exit due to activate"),
+                NetworkCommand::Timeout => debug!("Exit due to timeout"),
+                NetworkCommand::Exit => {
+                    return;
+                }
+                NetworkCommand::Connect { .. } => {
+                    return;
+                }
+                NetworkCommand::RestartApp => debug!("User restarted app"),
+            },
+            Err(_) => {
+                return;
+            }
+        }
+    }
 }
 
 pub fn init_networking(config: &Config) -> Result<()> {
@@ -458,16 +498,23 @@ fn create_portal_impl(
     Ok(portal_connection)
 }
 
-fn stop_portal(connection: &Connection, config: &Config) -> Result<()> {
+fn stop_portal(connection: &mut Option<Connection>, config: &Config) -> Result<()> {
     stop_portal_impl(connection, config).chain_err(|| ErrorKind::StopAccessPoint)
 }
 
-fn stop_portal_impl(connection: &Connection, config: &Config) -> Result<()> {
+fn stop_portal_impl(connection: &mut Option<Connection>, config: &Config) -> Result<()> {
     info!("Stopping access point '{}'...", config.ssid);
-    connection.deactivate()?;
-    connection.delete()?;
-    thread::sleep(Duration::from_secs(1));
-    info!("Access point '{}' stopped", config.ssid);
+    if let Some(conn) = connection {
+        conn.deactivate()?;
+        conn.delete()?;
+        thread::sleep(Duration::from_secs(1));
+        info!("Access point '{}' stopped", config.ssid);
+    } else {
+        warn!("No connection to deactivate or delete.");
+    }
+
+    *connection = None;
+
     Ok(())
 }
 
