@@ -184,12 +184,22 @@ impl NetworkCommandHandler {
                     ssid,
                     identity,
                     passphrase,
-                } => {
-                    if self.connect(&ssid, &identity, &passphrase)? {
+                } => match self.connect(&ssid, &identity, &passphrase) {
+                    Ok(_) => {
                         self.stop(exit_tx, result);
                         return return_result;
                     }
-                }
+                    Err(e) => {
+                        match e.kind() {
+                            ErrorKind::WiFiConnectionFailed => {
+                                error!("{}", e.to_string())
+                            }
+                            _ => error!("Unknown error {}", e),
+                        }
+                        self.stop(exit_tx, Ok(Some(NetworkCommand::RestartApp)));
+                        return Ok(Some(NetworkCommand::RestartApp));
+                    }
+                },
                 NetworkCommand::RestartApp => {
                     info!("Restarting...");
                     self.stop(exit_tx, result);
@@ -213,14 +223,19 @@ impl NetworkCommandHandler {
     fn stop(&mut self, exit_tx: &Sender<ExitResult>, result: ExitResult) {
         // Only stop dnsmasq if not restarting the app
         if let Ok(Some(ref network_command)) = result {
-            // TODO consider other exit codes? e.g. timeout
-            if *network_command != NetworkCommand::RestartApp {
-                info!("Stopping dnsmasq");
-                let _ = stop_dnsmasq(&mut self.dnsmasq);
+            match network_command {
+                NetworkCommand::Exit => {
+                    info!("Stopping dnsmasq");
+                    let _ = stop_dnsmasq(&mut self.dnsmasq);
+                }
+                NetworkCommand::Connect { .. } => {
+                    info!("Stopping dnsmasq");
+                    let _ = stop_dnsmasq(&mut self.dnsmasq);
+                }
+                _ => debug!("Keeping dnsmasq alive"),
             }
         }
 
-        debug!("Stopping network command_handler");
         let _ = stop_portal(&mut self.portal_connection, &self.config);
 
         let _ = exit_tx.send(result);
@@ -236,7 +251,7 @@ impl NetworkCommandHandler {
             .chain_err(|| ErrorKind::SendAccessPointSSIDs)
     }
 
-    fn connect(&mut self, ssid: &str, identity: &str, passphrase: &str) -> Result<bool> {
+    fn connect(&mut self, ssid: &str, identity: &str, passphrase: &str) -> Result<()> {
         delete_existing_connections_to_same_network(&self.manager, ssid);
 
         stop_portal(&mut self.portal_connection, &self.config)?;
@@ -252,8 +267,8 @@ impl NetworkCommandHandler {
 
             match wifi_device.connect(access_point, &credentials) {
                 Ok((connection, state)) => {
-                    if state == ConnectionState::Activated {
-                        match wait_for_connectivity(&self.manager, 20) {
+                    if state == ConnectionState::Activated || state == ConnectionState::Activating {
+                        match wait_for_connectivity(&self.manager, 30) {
                             Ok(has_connectivity) => {
                                 if has_connectivity {
                                     info!("Internet connectivity established");
@@ -264,17 +279,15 @@ impl NetworkCommandHandler {
                             Err(err) => error!("Getting Internet connectivity failed: {}", err),
                         }
 
-                        return Ok(true);
+                        return Ok(());
+                    } else {
+                        error!("Wrong connection state {:?}", state);
                     }
 
+                    // connection not activated - delete
                     if let Err(err) = connection.delete() {
                         error!("Deleting connection object failed: {}", err)
                     }
-
-                    warn!(
-                        "Connection to access point not activated '{}': {:?}",
-                        ssid, state
-                    );
                 }
                 Err(e) => {
                     warn!("Error connecting to access point '{}': {}", ssid, e);
@@ -282,11 +295,8 @@ impl NetworkCommandHandler {
             }
         }
 
-        self.access_points = get_access_points(&self.device)?;
-
-        self.portal_connection = Some(create_portal(&self.device, &self.config)?);
-
-        Ok(false)
+        // Connection activation failed
+        return Err(ErrorKind::WiFiConnectionFailed.into());
     }
 }
 
@@ -315,6 +325,7 @@ fn init_access_point_credentials(
     }
 }
 
+// Network Thread
 pub fn process_network_commands(config: &Config, exit_tx: &Sender<ExitResult>) {
     let mut command_handler = match NetworkCommandHandler::new(config, exit_tx) {
         Ok(command_handler) => command_handler,
@@ -330,17 +341,16 @@ pub fn process_network_commands(config: &Config, exit_tx: &Sender<ExitResult>) {
 
         match result {
             Ok(command) => match command.unwrap() {
-                NetworkCommand::Activate => error!("Exit due to activate"),
-                NetworkCommand::Timeout => debug!("Exit due to timeout"),
                 NetworkCommand::Exit => {
                     return;
                 }
                 NetworkCommand::Connect { .. } => {
                     return;
                 }
-                NetworkCommand::RestartApp => debug!("User restarted app"),
+                _ => debug!("Restarting app"),
             },
-            Err(_) => {
+            Err(e) => {
+                error!("{}", e.to_string());
                 return;
             }
         }

@@ -107,6 +107,9 @@ error_chain! {
             description("Root privileges required")
             display("You need root privileges to run {}", app)
         }
+        WiFiConnectionFailed {
+            description("Establishing WiFi connection failed")
+        }
     }
 }
 
@@ -134,6 +137,7 @@ pub fn exit_code(e: &Error) -> i32 {
         ErrorKind::RootPrivilegesRequired(_) => 23,
         ErrorKind::UnmanagedDevice(_) => 24,
         ErrorKind::RestartCommand => 25,
+        ErrorKind::WiFiConnectionFailed => 26,
         _ => 1,
     }
 }

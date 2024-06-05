@@ -60,6 +60,24 @@ fn main() {
     }
 }
 
+fn check_internet_connectivity() -> Result<()> {
+    let url = "https://www.google.com";
+    let response = reqwest::blocking::get(url);
+
+    match response {
+        Ok(response) => {
+            if response.status().is_success() {
+                Ok(())
+            } else {
+                Err("No internet connection.".into())
+            }
+        }
+        Err(_) => {
+            return Err("Failed to send get request.".into());
+        }
+    }
+}
+
 fn run() -> Result<()> {
     block_exit_signals()?;
 
@@ -69,15 +87,20 @@ fn run() -> Result<()> {
 
     require_root()?;
 
+    if let Ok(_) = check_internet_connectivity() {
+        info!("Internet connected, skipping wifi-connect");
+        return Ok(());
+    }
+
     let (exit_tx, exit_rx) = channel();
+
     thread::spawn(move || {
         process_network_commands(&config, &exit_tx);
     });
 
-    loop {
-        debug!("Restarting main loop: Init networking");
-        init_networking(&get_config())?;
+    init_networking(&get_config())?;
 
+    loop {
         match exit_rx.recv() {
             Ok(result) => match result {
                 Ok(command) => match command.unwrap() {
@@ -98,6 +121,12 @@ fn run() -> Result<()> {
             Err(e) => {
                 return Err(e.into());
             }
+        }
+
+        // TODO Do this in separate thread
+        if let Ok(_) = check_internet_connectivity() {
+            info!("Internet connected, exiting");
+            return Ok(());
         }
     }
 }
