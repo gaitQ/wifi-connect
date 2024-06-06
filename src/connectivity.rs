@@ -2,8 +2,7 @@ use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 use errors::*;
-use exit::ExitResult;
-use network::NetworkCommand;
+use exit::{ExitEvent, ExitResult};
 
 pub fn check_internet_connectivity() -> Result<()> {
     let url = "https://www.google.com";
@@ -24,10 +23,12 @@ pub fn check_internet_connectivity() -> Result<()> {
 }
 
 pub fn connectivity_thread(exit_tx: &Sender<ExitResult>) {
+    let exit_tx = exit_tx.clone();
+
     loop {
         if let Ok(_) = check_internet_connectivity() {
             info!("Internet connected, exiting");
-            let _ = exit_tx.send(Ok(Some(NetworkCommand::Exit)));
+            let _ = exit_tx.send(Ok(ExitEvent::InternetConnected));
             return;
         }
 

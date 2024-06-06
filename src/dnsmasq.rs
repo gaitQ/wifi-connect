@@ -24,12 +24,10 @@ pub fn start_dnsmasq(config: &Config, device: &Device) -> Result<Child> {
         .chain_err(|| ErrorKind::Dnsmasq)
 }
 
-pub fn stop_dnsmasq(dnsmasq: &mut Option<std::process::Child>) -> Result<()> {
-    if let Some(child) = dnsmasq.as_mut() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
+pub fn stop_dnsmasq(dnsmasq: &mut std::process::Child) -> Result<()> {
+    info!("Stopping dnsmasq");
+    dnsmasq.kill()?;
+    dnsmasq.wait()?;
 
-    *dnsmasq = None;
     Ok(())
 }

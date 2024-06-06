@@ -13,7 +13,7 @@ use network_manager::{
 use config::Config;
 use dnsmasq::{start_dnsmasq, stop_dnsmasq};
 use errors::*;
-use exit::{exit, trap_exit_signals, ExitResult};
+use exit::{exit, trap_exit_signals, ExitEvent, ExitResult};
 use server::start_server;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -45,37 +45,32 @@ struct NetworkCommandHandler {
     access_points: Vec<AccessPoint>,
     portal_connection: Option<Connection>,
     config: Config,
-    dnsmasq: Option<process::Child>,
+    dnsmasq: process::Child,
     server_tx: Sender<NetworkCommandResponse>,
     network_rx: Receiver<NetworkCommand>,
-    activated: bool,
+    exit_tx_nm: Sender<ExitResult>,
+    portal_active: bool,
 }
 
 impl NetworkCommandHandler {
     fn new(config: &Config, exit_tx: &Sender<ExitResult>) -> Result<Self> {
+        // Thread channels
         let (network_tx, network_rx) = channel();
-
-        Self::spawn_trap_exit_signals(exit_tx, network_tx.clone());
-
-        let manager = NetworkManager::new();
-        debug!("NetworkManager connection initialized");
-
-        let device = find_device(&manager, &config.interface)?;
-
-        let access_points = get_access_points(&device)?;
-
-        let portal_connection = Some(create_portal(&device, config)?);
-
-        let dnsmasq = Some(start_dnsmasq(config, &device)?);
-
         let (server_tx, server_rx) = channel();
+        let exit_tx_nm = exit_tx.clone();
 
+        // Spawn other threads
+        Self::spawn_trap_exit_signals(exit_tx, network_tx.clone());
         Self::spawn_server(config, exit_tx, server_rx, network_tx.clone());
-
         Self::spawn_activity_timeout(config, network_tx);
 
+        let manager = NetworkManager::new();
+        let device = find_device(&manager, &config.interface)?;
+        let access_points = get_access_points(&device)?;
+        let portal_connection = Some(create_portal(&device, config)?);
+        let dnsmasq = start_dnsmasq(config, &device)?;
         let config = config.clone();
-        let activated = false;
+        let portal_active = false;
 
         Ok(NetworkCommandHandler {
             manager,
@@ -86,7 +81,8 @@ impl NetworkCommandHandler {
             dnsmasq,
             server_tx,
             network_rx,
-            activated,
+            exit_tx_nm,
+            portal_active,
         })
     }
 
@@ -147,68 +143,6 @@ impl NetworkCommandHandler {
         });
     }
 
-    fn run(&mut self, exit_tx: &Sender<ExitResult>) -> ExitResult {
-        self.activated = false;
-
-        if self.portal_connection.is_none() {
-            self.access_points = get_access_points(&self.device)?;
-            self.portal_connection = Some(create_portal(&self.device, &self.config)?);
-        }
-
-        if self.dnsmasq.is_none() {
-            self.dnsmasq = Some(start_dnsmasq(&self.config, &self.device)?);
-        };
-
-        loop {
-            let command = self.receive_network_command()?;
-            let result = Ok(Some(command.clone()));
-            let return_result = Ok(Some(command.clone()));
-
-            match command {
-                NetworkCommand::Activate => {
-                    self.activate_portal()?;
-                }
-                NetworkCommand::Timeout => {
-                    if !self.activated {
-                        info!("Timeout reached. Exiting...");
-                        self.stop(exit_tx, result);
-                        return return_result;
-                    }
-                }
-                NetworkCommand::Exit => {
-                    info!("Exiting...");
-                    self.stop(exit_tx, result);
-                    return return_result;
-                }
-                NetworkCommand::Connect {
-                    ssid,
-                    identity,
-                    passphrase,
-                } => match self.connect(&ssid, &identity, &passphrase) {
-                    Ok(_) => {
-                        self.stop(exit_tx, result);
-                        return return_result;
-                    }
-                    Err(e) => {
-                        match e.kind() {
-                            ErrorKind::WiFiConnectionFailed => {
-                                error!("{}", e.to_string())
-                            }
-                            _ => error!("Unknown error {}", e),
-                        }
-                        self.stop(exit_tx, Ok(Some(NetworkCommand::RestartApp)));
-                        return Ok(Some(NetworkCommand::RestartApp));
-                    }
-                },
-                NetworkCommand::RestartApp => {
-                    info!("Restarting...");
-                    self.stop(exit_tx, result);
-                    return return_result;
-                }
-            }
-        }
-    }
-
     fn receive_network_command(&self) -> Result<NetworkCommand> {
         match self.network_rx.recv() {
             Ok(command) => Ok(command),
@@ -220,29 +154,36 @@ impl NetworkCommandHandler {
         }
     }
 
-    fn stop(&mut self, exit_tx: &Sender<ExitResult>, result: ExitResult) {
+    fn stop(&mut self, result: Result<NetworkCommand>) -> Result<()> {
+        // Always stop the portal
+        self.stop_portal()?;
+
         // Only stop dnsmasq if not restarting the app
-        if let Ok(Some(ref network_command)) = result {
-            match network_command {
+        match result {
+            Ok(network_command) => match network_command {
                 NetworkCommand::Exit => {
-                    info!("Stopping dnsmasq");
-                    let _ = stop_dnsmasq(&mut self.dnsmasq);
+                    stop_dnsmasq(&mut self.dnsmasq)?;
+                    let _ = self.exit_tx_nm.send(Ok(ExitEvent::ExitSignal));
                 }
                 NetworkCommand::Connect { .. } => {
-                    info!("Stopping dnsmasq");
-                    let _ = stop_dnsmasq(&mut self.dnsmasq);
+                    stop_dnsmasq(&mut self.dnsmasq)?;
+                    let _ = self.exit_tx_nm.send(Ok(ExitEvent::WiFiConnected));
                 }
-                _ => debug!("Keeping dnsmasq alive"),
+                NetworkCommand::Timeout => {
+                    stop_dnsmasq(&mut self.dnsmasq)?;
+                    let _ = self.exit_tx_nm.send(Ok(ExitEvent::Timeout));
+                }
+                NetworkCommand::Activate => error!("Stop for Activated"),
+                NetworkCommand::RestartApp => debug!("Restarting app"),
             }
+            Err(e) => return Err(e),
         }
 
-        let _ = stop_portal(&mut self.portal_connection, &self.config);
-
-        let _ = exit_tx.send(result);
+        Ok(())
     }
 
     fn activate_portal(&mut self) -> Result<()> {
-        self.activated = true;
+        self.portal_active = true;
 
         let networks = get_networks(&self.access_points);
 
@@ -251,10 +192,31 @@ impl NetworkCommandHandler {
             .chain_err(|| ErrorKind::SendAccessPointSSIDs)
     }
 
+    fn stop_portal_impl(&mut self) -> Result<()> {
+        info!("Stopping access point '{}'...", self.config.ssid);
+        if let Some(conn) = &self.portal_connection {
+            conn.deactivate()?;
+            conn.delete()?;
+            thread::sleep(Duration::from_secs(1));
+            info!("Access point '{}' stopped", self.config.ssid);
+        } else {
+            warn!("No connection to deactivate or delete.");
+        }
+
+        self.portal_active = false;
+        self.portal_connection = None;
+    
+        Ok(())
+    }
+
+    fn stop_portal(&mut self) -> Result<()> {
+        self.stop_portal_impl().chain_err(|| ErrorKind::StopAccessPoint)
+    }
+
     fn connect(&mut self, ssid: &str, identity: &str, passphrase: &str) -> Result<()> {
         delete_existing_connections_to_same_network(&self.manager, ssid);
 
-        stop_portal(&mut self.portal_connection, &self.config)?;
+        self.stop_portal()?;
 
         self.access_points = get_access_points(&self.device)?;
 
@@ -300,6 +262,90 @@ impl NetworkCommandHandler {
     }
 }
 
+pub fn network_init(config: &Config) -> Result<()> {
+    start_network_manager_service()?;
+
+    delete_exising_wifi_connect_ap_profile(&config.ssid).chain_err(|| ErrorKind::DeleteAccessPoint)
+}
+
+// Network Thread
+pub fn network_thread(config: &Config, exit_tx: &Sender<ExitResult>) {
+    match network_thread_impl(config, exit_tx) {
+        Ok(_) => return,
+        Err(e) => {
+            // Thread returned error -> Notify main thread of error
+            exit(exit_tx, e);
+            return;
+        }
+    };
+}
+
+pub fn network_thread_impl(config: &Config, exit_tx: &Sender<ExitResult>) -> Result<()> {
+    let mut command_handler = match NetworkCommandHandler::new(config, exit_tx) {
+        Ok(command_handler) => command_handler,
+        Err(e) => return Err(e),
+    };
+
+    loop {
+        if command_handler.portal_connection.is_none() {
+            command_handler.access_points = get_access_points(&command_handler.device)?;
+            command_handler.portal_connection = Some(create_portal(
+                &command_handler.device,
+                &command_handler.config,
+            )?);
+        }
+
+        loop {
+            let command = command_handler.receive_network_command()?;
+            let result = Ok(command.clone());
+
+            match command {
+                NetworkCommand::Activate => {
+                    command_handler.activate_portal()?;
+                }
+                NetworkCommand::Timeout => {
+                    if !command_handler.portal_active {
+                        info!("Timeout reached. Exiting...");
+                        command_handler.stop(result)?;
+                        return Ok(());
+                    }
+                }
+                NetworkCommand::Exit => {
+                    info!("Exiting...");
+                    command_handler.stop(result)?;
+                    return Ok(());
+                }
+                NetworkCommand::Connect {
+                    ssid,
+                    identity,
+                    passphrase,
+                } => match command_handler.connect(&ssid, &identity, &passphrase) {
+                    Ok(_) => {
+                        command_handler.stop(result)?;
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        match e.kind() {
+                            ErrorKind::WiFiConnectionFailed => {
+                                error!("{}", e.to_string())
+                            }
+                            _ => error!("Unknown error {}", e),
+                        }
+                        command_handler.stop(Ok(NetworkCommand::RestartApp))?;
+                        break;
+                    }
+                },
+                NetworkCommand::RestartApp => {
+                    info!("Restarting...");
+                    command_handler.stop(result)?;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// Private functions for NetworkManager handling
 fn init_access_point_credentials(
     access_point: &AccessPoint,
     identity: &str,
@@ -325,45 +371,7 @@ fn init_access_point_credentials(
     }
 }
 
-// Network Thread
-pub fn process_network_commands(config: &Config, exit_tx: &Sender<ExitResult>) {
-    let mut command_handler = match NetworkCommandHandler::new(config, exit_tx) {
-        Ok(command_handler) => command_handler,
-        Err(e) => {
-            exit(exit_tx, e);
-            return;
-        }
-    };
-
-    loop {
-        debug!("Starting network command_handler");
-        let result = command_handler.run(exit_tx);
-
-        match result {
-            Ok(command) => match command.unwrap() {
-                NetworkCommand::Exit => {
-                    return;
-                }
-                NetworkCommand::Connect { .. } => {
-                    return;
-                }
-                _ => debug!("Restarting app"),
-            },
-            Err(e) => {
-                error!("{}", e.to_string());
-                return;
-            }
-        }
-    }
-}
-
-pub fn init_networking(config: &Config) -> Result<()> {
-    start_network_manager_service()?;
-
-    delete_exising_wifi_connect_ap_profile(&config.ssid).chain_err(|| ErrorKind::DeleteAccessPoint)
-}
-
-pub fn find_device(manager: &NetworkManager, interface: &Option<String>) -> Result<Device> {
+fn find_device(manager: &NetworkManager, interface: &Option<String>) -> Result<Device> {
     if let Some(ref interface) = *interface {
         let device = manager
             .get_device_by_interface(interface)
@@ -508,26 +516,6 @@ fn create_portal_impl(
     Ok(portal_connection)
 }
 
-fn stop_portal(connection: &mut Option<Connection>, config: &Config) -> Result<()> {
-    stop_portal_impl(connection, config).chain_err(|| ErrorKind::StopAccessPoint)
-}
-
-fn stop_portal_impl(connection: &mut Option<Connection>, config: &Config) -> Result<()> {
-    info!("Stopping access point '{}'...", config.ssid);
-    if let Some(conn) = connection {
-        conn.deactivate()?;
-        conn.delete()?;
-        thread::sleep(Duration::from_secs(1));
-        info!("Access point '{}' stopped", config.ssid);
-    } else {
-        warn!("No connection to deactivate or delete.");
-    }
-
-    *connection = None;
-
-    Ok(())
-}
-
 fn wait_for_connectivity(manager: &NetworkManager, timeout: u64) -> Result<bool> {
     let mut total_time = 0;
 
@@ -561,7 +549,7 @@ fn wait_for_connectivity(manager: &NetworkManager, timeout: u64) -> Result<bool>
     }
 }
 
-pub fn start_network_manager_service() -> Result<()> {
+fn start_network_manager_service() -> Result<()> {
     let state = match NetworkManager::get_service_state() {
         Ok(state) => state,
         _ => {

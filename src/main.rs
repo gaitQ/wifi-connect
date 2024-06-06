@@ -25,12 +25,12 @@ extern crate serde_json;
 extern crate staticfile;
 
 mod config;
+mod connectivity;
 mod dnsmasq;
 mod errors;
 mod exit;
 mod logger;
 mod network;
-mod connectivity;
 mod privileges;
 mod server;
 
@@ -41,10 +41,11 @@ use std::sync::mpsc::channel;
 use std::thread;
 
 use config::get_config;
+use connectivity::{check_internet_connectivity, connectivity_thread};
 use errors::*;
 use exit::block_exit_signals;
-use network::{init_networking, process_network_commands, NetworkCommand};
-use connectivity::{check_internet_connectivity, connectivity_thread};
+use exit::ExitEvent;
+use network::{network_init, network_thread};
 use privileges::require_root;
 
 fn main() {
@@ -81,7 +82,7 @@ fn run() -> Result<()> {
     let exit_tx_conn = exit_tx.clone();
 
     thread::spawn(move || {
-        process_network_commands(&config, &exit_tx);
+        network_thread(&config, &exit_tx);
     });
 
     thread::spawn(move || {
@@ -89,36 +90,37 @@ fn run() -> Result<()> {
     });
 
     // Starts network manger & deletes current AP
-    init_networking(&get_config())?;
+    network_init(&get_config())?;
 
-    loop {
-        // Wait for exit event
-        match exit_rx.recv() {
-            Ok(result) => match result {
-                Ok(command) => match command.unwrap() {
-                    NetworkCommand::Activate => error!("Exit due to activate"),
-                    NetworkCommand::Timeout => debug!("Exit due to timeout"),
-                    NetworkCommand::Exit => {
-                        return Ok(());
-                    }
-                    NetworkCommand::Connect { .. } => {
-                        return Ok(());
-                    }
-                    NetworkCommand::RestartApp => debug!("User restarted app"),
-                },
-                Err(e) => {
-                    return Err(e.into());
+    // Blocks unit a thread send an exit event
+    match exit_rx.recv() {
+        Ok(result) => match result {
+            Ok(event) => match event {
+                ExitEvent::ExitSignal => {
+                    info!("Exiting: Signal");
+                    return Ok(());
+                }
+                ExitEvent::InternetConnected => {
+                    info!("Exiting: Internet connected");
+                    return Ok(());
+                }
+                ExitEvent::WiFiConnected => {
+                    info!("Exiting: WiFi connected");
+                    return Ok(());
+                }
+                ExitEvent::Timeout => {
+                    info!("Exiting: Timeout");
+                    return Ok(());
                 }
             },
             Err(e) => {
+                error!("Exiting: Error {}", e.to_string());
                 return Err(e.into());
             }
-        }
-
-        // TODO Do this in separate thread
-        if let Ok(_) = check_internet_connectivity() {
-            info!("Internet connected, exiting");
-            return Ok(());
+        },
+        Err(e) => {
+            error!("Exiting: Receive Error {}", e.to_string());
+            return Err(e.into());
         }
     }
 }
