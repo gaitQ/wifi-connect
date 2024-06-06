@@ -30,6 +30,7 @@ mod errors;
 mod exit;
 mod logger;
 mod network;
+mod connectivity;
 mod privileges;
 mod server;
 
@@ -43,6 +44,7 @@ use config::get_config;
 use errors::*;
 use exit::block_exit_signals;
 use network::{init_networking, process_network_commands, NetworkCommand};
+use connectivity::{check_internet_connectivity, connectivity_thread};
 use privileges::require_root;
 
 fn main() {
@@ -60,24 +62,6 @@ fn main() {
     }
 }
 
-fn check_internet_connectivity() -> Result<()> {
-    let url = "https://www.google.com";
-    let response = reqwest::blocking::get(url);
-
-    match response {
-        Ok(response) => {
-            if response.status().is_success() {
-                Ok(())
-            } else {
-                Err("No internet connection.".into())
-            }
-        }
-        Err(_) => {
-            return Err("Failed to send get request.".into());
-        }
-    }
-}
-
 fn run() -> Result<()> {
     block_exit_signals()?;
 
@@ -92,15 +76,23 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
+    // Channels to signal exit events from other threads
     let (exit_tx, exit_rx) = channel();
+    let exit_tx_conn = exit_tx.clone();
 
     thread::spawn(move || {
         process_network_commands(&config, &exit_tx);
     });
 
+    thread::spawn(move || {
+        connectivity_thread(&exit_tx_conn);
+    });
+
+    // Starts network manger & deletes current AP
     init_networking(&get_config())?;
 
     loop {
+        // Wait for exit event
         match exit_rx.recv() {
             Ok(result) => match result {
                 Ok(command) => match command.unwrap() {

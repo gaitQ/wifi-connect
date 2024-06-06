@@ -14,9 +14,10 @@ while true; do
     else
         printf 'Internet connection is unavailable. Starting WiFi Connect.\n'
         ./wifi-connect --portal-ssid $(hostname)
+        echo wifi-connect exited with $?
     fi
 
     # Sleep for a defined interval before rechecking; adjust the sleep duration as needed
     # echo "Waiting for the next check..."
-    sleep 10
+    sleep 60
 done
