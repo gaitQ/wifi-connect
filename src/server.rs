@@ -25,7 +25,7 @@ struct RequestSharedState {
     gateway: Ipv4Addr,
     server_rx: Receiver<NetworkCommandResponse>,
     network_tx: Sender<NetworkCommand>,
-    exit_tx: Sender<ExitResult>,
+    exit_tx: crossbeam::channel::Sender<ExitResult>,
 }
 
 impl typemap::Key for RequestSharedState {
@@ -136,7 +136,7 @@ pub fn start_server(
     listening_port: u16,
     server_rx: Receiver<NetworkCommandResponse>,
     network_tx: Sender<NetworkCommand>,
-    exit_tx: Sender<ExitResult>,
+    exit_tx: crossbeam::channel::Sender<ExitResult>,
     ui_directory: &PathBuf,
 ) {
     let exit_tx_clone = exit_tx.clone();
@@ -178,7 +178,6 @@ pub fn start_server(
             ErrorKind::StartHTTPServer(address, e.to_string()).into(),
         );
     }
-    info!("Stopping HTTP server");
 }
 
 fn networks(req: &mut Request) -> IronResult<Response> {

@@ -1,4 +1,4 @@
-use std::sync::mpsc::Sender;
+use crossbeam::channel::Sender;
 
 use nix::sys::signal::{SigSet, SIGHUP, SIGINT, SIGQUIT, SIGTERM};
 

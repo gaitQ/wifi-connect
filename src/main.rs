@@ -10,6 +10,7 @@ extern crate error_chain;
 extern crate serde_derive;
 
 extern crate clap;
+extern crate crossbeam;
 extern crate env_logger;
 extern crate iron;
 extern crate iron_cors;
@@ -35,11 +36,11 @@ mod server;
 use std::io::Write;
 use std::path;
 use std::process;
-use std::sync::mpsc::channel;
 use std::thread;
 
 use config::get_config;
 use connectivity::{check_internet_connectivity, connectivity_thread};
+use crossbeam::channel;
 use errors::*;
 use exit::block_exit_signals;
 use exit::ExitEvent;
@@ -66,8 +67,6 @@ fn run() -> Result<()> {
 
     logger::init();
 
-    let config = get_config();
-
     require_root()?;
 
     if let Ok(_) = check_internet_connectivity() {
@@ -75,41 +74,33 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
-    // Channels to signal exit events from other threads
-    let (exit_tx, exit_rx) = channel();
+    // Channels to signal exit events across threads
+    let (exit_tx, exit_rx) = channel::unbounded();
+    let exit_tx_nw = exit_tx.clone();
+    let exit_rx_nw = exit_rx.clone();
     let exit_tx_conn = exit_tx.clone();
-
-    thread::spawn(move || {
-        network_thread(&config, &exit_tx);
-    });
-
-    thread::spawn(move || {
-        connectivity_thread(&exit_tx_conn);
-    });
 
     // Starts network manger & deletes current AP
     network_init(&get_config())?;
+
+    let config = get_config();
+
+    let network_thread_handle = thread::spawn(move || {
+        network_thread(&config, &exit_tx_nw, &exit_rx_nw);
+    });
+
+    let connectivity_thread_handle = thread::spawn(move || {
+        connectivity_thread(&exit_tx_conn);
+    });
 
     // Blocks unit a thread send an exit event
     match exit_rx.recv() {
         Ok(result) => match result {
             Ok(event) => match event {
-                ExitEvent::ExitSignal => {
-                    info!("Exiting: Signal");
-                    return Ok(());
-                }
-                ExitEvent::InternetConnected => {
-                    info!("Exiting: Internet connected");
-                    return Ok(());
-                }
-                ExitEvent::WiFiConnected => {
-                    info!("Exiting: WiFi connected");
-                    return Ok(());
-                }
-                ExitEvent::Timeout => {
-                    info!("Exiting: Timeout");
-                    return Ok(());
-                }
+                ExitEvent::ExitSignal => info!("Exiting: Signal"),
+                ExitEvent::InternetConnected => info!("Exiting: Internet connected"),
+                ExitEvent::WiFiConnected => info!("Exiting: WiFi connected"),
+                ExitEvent::Timeout => info!("Exiting: Timeout"),
             },
             Err(e) => {
                 error!("Exiting: Error {}", e.to_string());
@@ -118,7 +109,15 @@ fn run() -> Result<()> {
         },
         Err(e) => {
             error!("Exiting: Receive Error {}", e.to_string());
-            return Err(e.into());
+            return Err(e.to_string().into());
         }
     }
+
+    // Signal other threads to stop
+    let _ = exit_tx.send(Ok(ExitEvent::ExitSignal));
+
+    // Join the network thread to ensure it completes gracefully
+    let _ = network_thread_handle.join();
+
+    Ok(())
 }

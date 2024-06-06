@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::net::Ipv4Addr;
 use std::process;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::Duration;
 
@@ -27,6 +27,7 @@ pub enum NetworkCommand {
         passphrase: String,
     },
     RestartApp,
+    CheckExitEvent,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -48,29 +49,30 @@ struct NetworkCommandHandler {
     dnsmasq: process::Child,
     server_tx: Sender<NetworkCommandResponse>,
     network_rx: Receiver<NetworkCommand>,
-    exit_tx_nm: Sender<ExitResult>,
+    exit_tx_nm: crossbeam::channel::Sender<ExitResult>,
     portal_active: bool,
 }
 
 impl NetworkCommandHandler {
-    fn new(config: &Config, exit_tx: &Sender<ExitResult>) -> Result<Self> {
+    fn new(config: &Config, exit_tx: &crossbeam::channel::Sender<ExitResult>) -> Result<Self> {
         // Thread channels
         let (network_tx, network_rx) = channel();
         let (server_tx, server_rx) = channel();
         let exit_tx_nm = exit_tx.clone();
-
-        // Spawn other threads
-        Self::spawn_trap_exit_signals(exit_tx, network_tx.clone());
-        Self::spawn_server(config, exit_tx, server_rx, network_tx.clone());
-        Self::spawn_activity_timeout(config, network_tx);
 
         let manager = NetworkManager::new();
         let device = find_device(&manager, &config.interface)?;
         let access_points = get_access_points(&device)?;
         let portal_connection = Some(create_portal(&device, config)?);
         let dnsmasq = start_dnsmasq(config, &device)?;
-        let config = config.clone();
         let portal_active = false;
+
+        // Spawn other threads
+        Self::spawn_trap_exit_signals(exit_tx, network_tx.clone());
+        Self::spawn_server(config, exit_tx, server_rx, network_tx.clone());
+        Self::spawn_activity_timeout(config, network_tx);
+
+        let config = config.clone();
 
         Ok(NetworkCommandHandler {
             manager,
@@ -88,7 +90,7 @@ impl NetworkCommandHandler {
 
     fn spawn_server(
         config: &Config,
-        exit_tx: &Sender<ExitResult>,
+        exit_tx: &crossbeam::channel::Sender<ExitResult>,
         server_rx: Receiver<NetworkCommandResponse>,
         network_tx: Sender<NetworkCommand>,
     ) {
@@ -128,7 +130,10 @@ impl NetworkCommandHandler {
         });
     }
 
-    fn spawn_trap_exit_signals(exit_tx: &Sender<ExitResult>, network_tx: Sender<NetworkCommand>) {
+    fn spawn_trap_exit_signals(
+        exit_tx: &crossbeam::channel::Sender<ExitResult>,
+        network_tx: Sender<NetworkCommand>,
+    ) {
         let exit_tx_trap = exit_tx.clone();
 
         thread::spawn(move || {
@@ -144,8 +149,9 @@ impl NetworkCommandHandler {
     }
 
     fn receive_network_command(&self) -> Result<NetworkCommand> {
-        match self.network_rx.recv() {
+        match self.network_rx.try_recv() {
             Ok(command) => Ok(command),
+            Err(TryRecvError::Empty) => Ok(NetworkCommand::CheckExitEvent),
             Err(e) => {
                 // Sleep for a second, so that other threads may log error info.
                 thread::sleep(Duration::from_secs(1));
@@ -154,13 +160,12 @@ impl NetworkCommandHandler {
         }
     }
 
-    fn stop(&mut self, result: Result<NetworkCommand>) -> Result<()> {
+    fn stop(&mut self, command: NetworkCommand) -> Result<()> {
         // Always stop the portal
         self.stop_portal()?;
 
         // Only stop dnsmasq if not restarting the app
-        match result {
-            Ok(network_command) => match network_command {
+        match command {
                 NetworkCommand::Exit => {
                     stop_dnsmasq(&mut self.dnsmasq)?;
                     let _ = self.exit_tx_nm.send(Ok(ExitEvent::ExitSignal));
@@ -175,8 +180,7 @@ impl NetworkCommandHandler {
                 }
                 NetworkCommand::Activate => error!("Stop for Activated"),
                 NetworkCommand::RestartApp => debug!("Restarting app"),
-            }
-            Err(e) => return Err(e),
+                NetworkCommand::CheckExitEvent => error!("Stop for CheckExitEvent"),
         }
 
         Ok(())
@@ -205,12 +209,13 @@ impl NetworkCommandHandler {
 
         self.portal_active = false;
         self.portal_connection = None;
-    
+
         Ok(())
     }
 
     fn stop_portal(&mut self) -> Result<()> {
-        self.stop_portal_impl().chain_err(|| ErrorKind::StopAccessPoint)
+        self.stop_portal_impl()
+            .chain_err(|| ErrorKind::StopAccessPoint)
     }
 
     fn connect(&mut self, ssid: &str, identity: &str, passphrase: &str) -> Result<()> {
@@ -262,6 +267,12 @@ impl NetworkCommandHandler {
     }
 }
 
+impl Drop for NetworkCommandHandler {
+    fn drop(&mut self) {
+        let _ = self.stop(NetworkCommand::Exit);
+    }
+}
+
 pub fn network_init(config: &Config) -> Result<()> {
     start_network_manager_service()?;
 
@@ -269,8 +280,12 @@ pub fn network_init(config: &Config) -> Result<()> {
 }
 
 // Network Thread
-pub fn network_thread(config: &Config, exit_tx: &Sender<ExitResult>) {
-    match network_thread_impl(config, exit_tx) {
+pub fn network_thread(
+    config: &Config,
+    exit_tx: &crossbeam::channel::Sender<ExitResult>,
+    exit_rx: &crossbeam::channel::Receiver<ExitResult>,
+) {
+    match network_thread_impl(config, exit_tx, exit_rx) {
         Ok(_) => return,
         Err(e) => {
             // Thread returned error -> Notify main thread
@@ -280,7 +295,11 @@ pub fn network_thread(config: &Config, exit_tx: &Sender<ExitResult>) {
     };
 }
 
-pub fn network_thread_impl(config: &Config, exit_tx: &Sender<ExitResult>) -> Result<()> {
+pub fn network_thread_impl(
+    config: &Config,
+    exit_tx: &crossbeam::channel::Sender<ExitResult>,
+    exit_rx: &crossbeam::channel::Receiver<ExitResult>,
+) -> Result<()> {
     let mut command_handler = match NetworkCommandHandler::new(config, exit_tx) {
         Ok(command_handler) => command_handler,
         Err(e) => return Err(e),
@@ -297,7 +316,7 @@ pub fn network_thread_impl(config: &Config, exit_tx: &Sender<ExitResult>) -> Res
 
         loop {
             let command = command_handler.receive_network_command()?;
-            let result = Ok(command.clone());
+            let result = command.clone();
 
             match command {
                 NetworkCommand::Activate => {
@@ -331,7 +350,7 @@ pub fn network_thread_impl(config: &Config, exit_tx: &Sender<ExitResult>) -> Res
                             }
                             _ => error!("Unknown error {}", e),
                         }
-                        command_handler.stop(Ok(NetworkCommand::RestartApp))?;
+                        command_handler.stop(NetworkCommand::RestartApp)?;
                         break;
                     }
                 },
@@ -339,6 +358,17 @@ pub fn network_thread_impl(config: &Config, exit_tx: &Sender<ExitResult>) -> Res
                     info!("Restarting...");
                     command_handler.stop(result)?;
                     break;
+                }
+                NetworkCommand::CheckExitEvent => match exit_rx.try_recv() { 
+                    Ok(_) => {
+                        // Exit signal received, exit thread
+                        return Ok(());
+                    }
+                    Err(crossbeam::channel::TryRecvError::Empty) => thread::sleep(Duration::from_secs(1)),
+                    Err(e) => {
+                        return Err(e).chain_err(|| ErrorKind::RecvNetworkCommand);
+                    }
+
                 }
             }
         }

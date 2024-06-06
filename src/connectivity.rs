@@ -1,4 +1,4 @@
-use std::sync::mpsc::Sender;
+use crossbeam::channel::Sender;
 use std::thread;
 use std::time::Duration;
 use errors::*;
@@ -27,7 +27,7 @@ pub fn connectivity_thread(exit_tx: &Sender<ExitResult>) {
 
     loop {
         if let Ok(_) = check_internet_connectivity() {
-            info!("Internet connected, exiting");
+            info!("Internet connected.");
             let _ = exit_tx.send(Ok(ExitEvent::InternetConnected));
             return;
         }
