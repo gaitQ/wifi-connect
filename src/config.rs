@@ -1,4 +1,4 @@
-use clap::{App, Arg};
+use clap::{Arg, Command};
 
 use std::env;
 use std::ffi::OsStr;
@@ -26,136 +26,139 @@ pub struct Config {
 }
 
 pub fn get_config() -> Config {
-    let matches = App::new(crate_name!())
-        .version(crate_version!())
-        .author(crate_authors!())
-        .about(crate_description!())
+    let matches = Command::new(env!("CARGO_PKG_NAME"))
+        .version(env!("CARGO_PKG_VERSION"))
+        .author(env!("CARGO_PKG_AUTHORS"))
+        .about(env!("CARGO_PKG_DESCRIPTION"))
         .arg(
-            Arg::with_name("portal-interface")
-                .short("i")
+            Arg::new("portal-interface")
+                .short('i')
                 .long("portal-interface")
                 .value_name("interface")
                 .help("Wireless network interface to be used by WiFi Connect")
-                .takes_value(true),
         )
         .arg(
-            Arg::with_name("portal-ssid")
-                .short("s")
+            Arg::new("portal-ssid")
+                .short('s')
                 .long("portal-ssid")
                 .value_name("ssid")
                 .help(&format!(
                     "SSID of the captive portal WiFi network (default: {})",
                     DEFAULT_SSID
                 ))
-                .takes_value(true),
         )
         .arg(
-            Arg::with_name("portal-passphrase")
-                .short("p")
+            Arg::new("portal-passphrase")
+                .short('p')
                 .long("portal-passphrase")
                 .value_name("passphrase")
                 .help("WPA2 Passphrase of the captive portal WiFi network (default: none)")
-                .takes_value(true),
         )
         .arg(
-            Arg::with_name("portal-gateway")
-                .short("g")
+            Arg::new("portal-gateway")
+                .short('g')
                 .long("portal-gateway")
                 .value_name("gateway")
                 .help(&format!(
                     "Gateway of the captive portal WiFi network (default: {})",
                     DEFAULT_GATEWAY
                 ))
-                .takes_value(true),
         )
         .arg(
-            Arg::with_name("portal-dhcp-range")
-                .short("d")
+            Arg::new("portal-dhcp-range")
+                .short('d')
                 .long("portal-dhcp-range")
                 .value_name("dhcp_range")
                 .help(&format!(
                     "DHCP range of the WiFi network (default: {})",
                     DEFAULT_DHCP_RANGE
                 ))
-                .takes_value(true),
         )
         .arg(
-            Arg::with_name("portal-listening-port")
-                .short("o")
+            Arg::new("portal-listening-port")
+                .short('o')
                 .long("portal-listening-port")
                 .value_name("listening_port")
                 .help(&format!(
                     "Listening port of the captive portal web server (default: {})",
                     DEFAULT_LISTENING_PORT
                 ))
-                .takes_value(true),
         )
         .arg(
-            Arg::with_name("activity-timeout")
-                .short("a")
+            Arg::new("activity-timeout")
+                .short('a')
                 .long("activity-timeout")
                 .value_name("activity_timeout")
                 .help("Exit if no activity for the specified time (seconds) (default: none)")
-                .takes_value(true),
         )
         .arg(
-            Arg::with_name("ui-directory")
-                .short("u")
+            Arg::new("ui-directory")
+                .short('u')
                 .long("ui-directory")
                 .value_name("ui_directory")
                 .help(&format!(
                     "Web UI directory location (default: {})",
                     DEFAULT_UI_DIRECTORY
                 ))
-                .takes_value(true),
         )
         .get_matches();
 
-    let interface: Option<String> = matches.value_of("portal-interface").map_or_else(
-        || env::var("PORTAL_INTERFACE").ok(),
-        |v| Some(v.to_string()),
-    );
+    let interface: Option<String> = matches
+        .get_one::<String>("portal-interface")
+        .map_or_else(|| env::var("PORTAL_INTERFACE").ok(), |v| Some(v.clone()));
 
-    let ssid: String = matches.value_of("portal-ssid").map_or_else(
-        || env::var("PORTAL_SSID").unwrap_or_else(|_| DEFAULT_SSID.to_string()),
-        String::from,
-    );
+        let ssid: String = matches
+        .get_one::<String>("portal-ssid")
+        .map_or_else(
+            || env::var("PORTAL_SSID").unwrap_or_else(|_| DEFAULT_SSID.to_string()),
+            |v| v.clone(),
+        );
 
-    let passphrase: Option<String> = matches.value_of("portal-passphrase").map_or_else(
-        || env::var("PORTAL_PASSPHRASE").ok(),
-        |v| Some(v.to_string()),
-    );
+    let passphrase: Option<String> = matches
+        .get_one::<String>("portal-passphrase")
+        .map_or_else(|| env::var("PORTAL_PASSPHRASE").ok(), |v| Some(v.clone()));
 
-    let gateway = Ipv4Addr::from_str(&matches.value_of("portal-gateway").map_or_else(
-        || env::var("PORTAL_GATEWAY").unwrap_or_else(|_| DEFAULT_GATEWAY.to_string()),
-        String::from,
-    ))
+    let gateway = Ipv4Addr::from_str(
+        &matches
+            .get_one::<String>("portal-gateway")
+            .map_or_else(
+                || env::var("PORTAL_GATEWAY").unwrap_or_else(|_| DEFAULT_GATEWAY.to_string()),
+                |v| v.clone(),
+            ),
+    )
     .expect("Cannot parse gateway address");
 
-    let dhcp_range = matches.value_of("portal-dhcp-range").map_or_else(
-        || env::var("PORTAL_DHCP_RANGE").unwrap_or_else(|_| DEFAULT_DHCP_RANGE.to_string()),
-        String::from,
-    );
+    let dhcp_range = matches
+        .get_one::<String>("portal-dhcp-range")
+        .map_or_else(
+            || env::var("PORTAL_DHCP_RANGE").unwrap_or_else(|_| DEFAULT_DHCP_RANGE.to_string()),
+            |v| v.clone(),
+        );
 
     let listening_port = matches
-        .value_of("portal-listening-port")
+        .get_one::<String>("portal-listening-port")
         .map_or_else(
             || {
                 env::var("PORTAL_LISTENING_PORT")
                     .unwrap_or_else(|_| DEFAULT_LISTENING_PORT.to_string())
             },
-            String::from,
+            |v| v.clone(),
         )
         .parse::<u16>()
         .expect("Cannot parse listening port number");
 
-    let activity_timeout = u64::from_str(&matches.value_of("activity-timeout").map_or_else(
-        || env::var("ACTIVITY_TIMEOUT").unwrap_or_else(|_| DEFAULT_ACTIVITY_TIMEOUT.to_string()),
-        String::from,
-    ))
+    let activity_timeout = u64::from_str(
+        &matches
+            .get_one::<String>("activity-timeout")
+            .map_or_else(
+                || env::var("ACTIVITY_TIMEOUT").unwrap_or_else(|_| DEFAULT_ACTIVITY_TIMEOUT.to_string()),
+                |v| v.clone(),
+            ),
+    )
     .expect("Cannot parse activity timeout");
 
-    let ui_directory = get_ui_directory(matches.value_of("ui-directory"));
+
+    let ui_directory = get_ui_directory(matches.get_one::<String>("ui-directory").map(String::as_str));
 
     Config {
         interface,

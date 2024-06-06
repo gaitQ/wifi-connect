@@ -273,7 +273,7 @@ pub fn network_thread(config: &Config, exit_tx: &Sender<ExitResult>) {
     match network_thread_impl(config, exit_tx) {
         Ok(_) => return,
         Err(e) => {
-            // Thread returned error -> Notify main thread of error
+            // Thread returned error -> Notify main thread
             exit(exit_tx, e);
             return;
         }
