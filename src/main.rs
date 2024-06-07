@@ -10,7 +10,6 @@ extern crate error_chain;
 extern crate serde_derive;
 
 extern crate clap;
-extern crate crossbeam;
 extern crate env_logger;
 extern crate iron;
 extern crate iron_cors;
@@ -24,7 +23,6 @@ extern crate serde_json;
 extern crate staticfile;
 
 mod config;
-mod connectivity;
 mod dnsmasq;
 mod errors;
 mod exit;
@@ -39,8 +37,7 @@ use std::process;
 use std::thread;
 
 use config::get_config;
-use connectivity::{check_internet_connectivity, connectivity_thread};
-use crossbeam::channel;
+use std::sync::mpsc::channel;
 use errors::*;
 use exit::block_exit_signals;
 use exit::ExitEvent;
@@ -69,16 +66,8 @@ fn run() -> Result<()> {
 
     require_root()?;
 
-    if let Ok(_) = check_internet_connectivity() {
-        info!("Internet connected, skipping wifi-connect");
-        return Ok(());
-    }
-
     // Channels to signal exit events across threads
-    let (exit_tx, exit_rx) = channel::unbounded();
-    let exit_tx_nw = exit_tx.clone();
-    let exit_rx_nw = exit_rx.clone();
-    let exit_tx_conn = exit_tx.clone();
+    let (exit_tx, exit_rx) = channel();
 
     // Starts network manger & deletes current AP
     network_init(&get_config())?;
@@ -86,11 +75,7 @@ fn run() -> Result<()> {
     let config = get_config();
 
     let network_thread_handle = thread::spawn(move || {
-        network_thread(&config, &exit_tx_nw, &exit_rx_nw);
-    });
-
-    let connectivity_thread_handle = thread::spawn(move || {
-        connectivity_thread(&exit_tx_conn);
+        network_thread(&config, &exit_tx);
     });
 
     // Blocks unit a thread send an exit event
@@ -101,6 +86,7 @@ fn run() -> Result<()> {
                 ExitEvent::InternetConnected => info!("Exiting: Internet connected"),
                 ExitEvent::WiFiConnected => info!("Exiting: WiFi connected"),
                 ExitEvent::Timeout => info!("Exiting: Timeout"),
+                ExitEvent::UnexpectedExit => info!("Exiting: Unexpectedly"),
             },
             Err(e) => {
                 error!("Exiting: Error {}", e.to_string());
@@ -112,9 +98,6 @@ fn run() -> Result<()> {
             return Err(e.to_string().into());
         }
     }
-
-    // Signal other threads to stop
-    let _ = exit_tx.send(Ok(ExitEvent::ExitSignal));
 
     // Join the network thread to ensure it completes gracefully
     let _ = network_thread_handle.join();

@@ -25,7 +25,7 @@ struct RequestSharedState {
     gateway: Ipv4Addr,
     server_rx: Receiver<NetworkCommandResponse>,
     network_tx: Sender<NetworkCommand>,
-    exit_tx: crossbeam::channel::Sender<ExitResult>,
+    exit_tx: Sender<ExitResult>,
 }
 
 impl typemap::Key for RequestSharedState {
@@ -136,7 +136,7 @@ pub fn start_server(
     listening_port: u16,
     server_rx: Receiver<NetworkCommandResponse>,
     network_tx: Sender<NetworkCommand>,
-    exit_tx: crossbeam::channel::Sender<ExitResult>,
+    exit_tx: Sender<ExitResult>,
     ui_directory: &PathBuf,
 ) {
     let exit_tx_clone = exit_tx.clone();
@@ -185,7 +185,7 @@ fn networks(req: &mut Request) -> IronResult<Response> {
 
     let request_state = get_request_state!(req);
 
-    if let Err(e) = request_state.network_tx.send(NetworkCommand::Activate) {
+    if let Err(e) = request_state.network_tx.send(NetworkCommand::ActivatePortal) {
         return exit_with_error(&request_state, e, ErrorKind::SendNetworkCommandActivate);
     }
 
@@ -217,7 +217,7 @@ fn connect(req: &mut Request) -> IronResult<Response> {
 
     let request_state = get_request_state!(req);
 
-    let command = NetworkCommand::Connect {
+    let command = NetworkCommand::WiFiConnect {
         ssid,
         identity,
         passphrase,

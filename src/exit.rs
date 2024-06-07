@@ -1,5 +1,4 @@
-use crossbeam::channel::Sender;
-
+use std::sync::mpsc::Sender;
 use nix::sys::signal::{SigSet, SIGHUP, SIGINT, SIGQUIT, SIGTERM};
 
 use errors::*;
@@ -9,6 +8,7 @@ pub enum ExitEvent {
     Timeout,
     WiFiConnected,
     InternetConnected,
+    UnexpectedExit,
 }
 
 pub type ExitResult = Result<ExitEvent>;
