@@ -18,8 +18,7 @@ ENV DBUS_SYSTEM_BUS_ADDRESS=unix:path=/host/run/dbus/system_bus_socket
 EXPOSE 80
 
 # copy prebuild UI, wifi-connect program and start script
-# COPY target/release/wifi-connect /usr/src/app/
-COPY target/debug/wifi-connect /usr/src/app/
+COPY target/release/wifi-connect /usr/src/app/
 COPY start-wifi-connect.sh /usr/src/app/
 COPY ui/build /usr/src/app/ui
 
