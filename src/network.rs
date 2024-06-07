@@ -54,7 +54,7 @@ struct NetworkCommandHandler {
 }
 
 impl NetworkCommandHandler {
-    fn new(config: &Config, exit_tx: &Sender<ExitResult>) -> Result<Self> {
+    pub fn new(config: &Config, exit_tx: &Sender<ExitResult>) -> Result<Self> {
         // Thread channels
         let (network_tx, network_rx) = channel();
         let (server_tx, server_rx) = channel();
@@ -145,7 +145,7 @@ impl NetworkCommandHandler {
         });
     }
 
-    fn receive_network_command(&self) -> Result<NetworkCommand> {
+    pub fn receive_network_command(&self) -> Result<NetworkCommand> {
         match self.network_rx.try_recv() {
             Ok(command) => Ok(command),
             Err(TryRecvError::Empty) => Ok(NetworkCommand::CheckConnectivity),
@@ -157,16 +157,23 @@ impl NetworkCommandHandler {
         }
     }
 
-    fn stop(&mut self, event: ExitEvent) -> Result<()> {
+    pub fn reload(&mut self) -> Result<()> {
+        // Only stop the portal to allow scanning of APs, keeping dnsmasq alive
+        self.stop_portal()?;
+        Ok(())
+    }
+
+    pub fn stop(&mut self, event: ExitEvent) -> Result<()> {
         self.stop_portal()?;
         stop_dnsmasq(&mut self.dnsmasq)?;
 
+        // Notify main thread of exit event
         let _ = self.exit_tx.send(Ok(event));
 
         Ok(())
     }
 
-    fn activate_portal(&mut self) -> Result<()> {
+    pub fn activate_portal(&mut self) -> Result<()> {
         self.portal_active = true;
 
         let networks = get_networks(&self.access_points);
@@ -174,6 +181,11 @@ impl NetworkCommandHandler {
         self.server_tx
             .send(NetworkCommandResponse::Networks(networks))
             .chain_err(|| ErrorKind::SendAccessPointSSIDs)
+    }
+    
+    fn stop_portal(&mut self) -> Result<()> {
+        self.stop_portal_impl()
+            .chain_err(|| ErrorKind::StopAccessPoint)
     }
 
     fn stop_portal_impl(&mut self) -> Result<()> {
@@ -193,12 +205,7 @@ impl NetworkCommandHandler {
         Ok(())
     }
 
-    fn stop_portal(&mut self) -> Result<()> {
-        self.stop_portal_impl()
-            .chain_err(|| ErrorKind::StopAccessPoint)
-    }
-
-    fn connect(&mut self, ssid: &str, identity: &str, passphrase: &str) -> Result<()> {
+    fn connect_to_wifi(&mut self, ssid: &str, identity: &str, passphrase: &str) -> Result<()> {
         delete_existing_connections_to_same_network(&self.manager, ssid);
 
         self.stop_portal()?;
@@ -228,7 +235,7 @@ impl NetworkCommandHandler {
 
                         return Ok(());
                     } else {
-                        error!("Wrong connection state {:?}", state);
+                        error!("Wrong connection state: {:?}", state);
                     }
 
                     // connection not activated - delete
@@ -255,20 +262,17 @@ impl Drop for NetworkCommandHandler {
 
 pub fn network_init(config: &Config) -> Result<()> {
     start_network_manager_service()?;
+    delete_existing_wifi_connect_ap_profile(&config.ssid).chain_err(|| ErrorKind::DeleteAccessPoint)?;
 
-    delete_exising_wifi_connect_ap_profile(&config.ssid).chain_err(|| ErrorKind::DeleteAccessPoint)
+    Ok(())
 }
 
 // Network Thread
 pub fn network_thread(config: &Config, exit_tx: &Sender<ExitResult>) {
-    match network_thread_impl(config, exit_tx) {
-        Ok(_) => return,
-        Err(e) => {
-            // Thread returned error -> Notify main thread
-            exit(exit_tx, e);
-            return;
-        }
-    };
+    if let Err(e) = network_thread_impl(config, exit_tx) {
+        // Thread returned error -> Notify main thread
+        exit(exit_tx, e);
+    }
 }
 
 pub fn network_thread_impl(config: &Config, exit_tx: &Sender<ExitResult>) -> Result<()> {
@@ -308,7 +312,7 @@ pub fn network_thread_impl(config: &Config, exit_tx: &Sender<ExitResult>) -> Res
                     ssid,
                     identity,
                     passphrase,
-                } => match command_handler.connect(&ssid, &identity, &passphrase) {
+                } => match command_handler.connect_to_wifi(&ssid, &identity, &passphrase) {
                     Ok(_) => {
                         command_handler.stop(ExitEvent::WiFiConnected)?;
                         return Ok(());
@@ -320,13 +324,13 @@ pub fn network_thread_impl(config: &Config, exit_tx: &Sender<ExitResult>) -> Res
                             }
                             _ => error!("Unknown error {}", e),
                         }
-                        command_handler.stop_portal()?;
+                        command_handler.reload()?;
                         break;
                     }
                 },
                 NetworkCommand::RestartApp => {
                     info!("Restarting...");
-                    command_handler.stop_portal()?;
+                    command_handler.reload()?;
                     break;
                 }
                 NetworkCommand::CheckConnectivity => {
@@ -570,7 +574,7 @@ fn start_network_manager_service() -> Result<()> {
     Ok(())
 }
 
-fn delete_exising_wifi_connect_ap_profile(ssid: &str) -> Result<()> {
+fn delete_existing_wifi_connect_ap_profile(ssid: &str) -> Result<()> {
     let manager = NetworkManager::new();
 
     for connection in &manager.get_connections()? {
