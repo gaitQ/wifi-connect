@@ -39,6 +39,10 @@ error_chain! {
             description("Sending NetworkCommand::Connect failed")
         }
 
+        RestartCommand {
+            description("Requesting restart command failed")
+        }
+
         DeviceByInterface(interface: String) {
             description("Cannot find network device with interface name")
             display("Cannot find network device with interface name '{}'", interface)
@@ -103,6 +107,9 @@ error_chain! {
             description("Root privileges required")
             display("You need root privileges to run {}", app)
         }
+        WiFiConnectionFailed {
+            description("Establishing WiFi connection failed")
+        }
     }
 }
 
@@ -129,6 +136,8 @@ pub fn exit_code(e: &Error) -> i32 {
         ErrorKind::TrapExitSignals => 22,
         ErrorKind::RootPrivilegesRequired(_) => 23,
         ErrorKind::UnmanagedDevice(_) => 24,
+        ErrorKind::RestartCommand => 25,
+        ErrorKind::WiFiConnectionFailed => 26,
         _ => 1,
     }
 }

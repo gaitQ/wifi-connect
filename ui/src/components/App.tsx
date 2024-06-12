@@ -4,6 +4,7 @@ import { Navbar, Provider, Container } from 'rendition';
 import { NetworkInfoForm } from './NetworkInfoForm';
 import { Notifications } from './Notifications';
 import { createGlobalStyle } from 'styled-components';
+import styled from 'styled-components';
 
 const GlobalStyle = createGlobalStyle`
 	body {
@@ -20,6 +21,12 @@ const GlobalStyle = createGlobalStyle`
 	}
 `;
 
+// Set colors for Navbar component
+const StyledNavbar = styled(Navbar)`
+	background-color: #e5554f;
+	color: white; // text color
+`;
+
 export interface NetworkInfo {
 	ssid?: string;
 	identity?: string;
@@ -34,6 +41,7 @@ export interface Network {
 const App = () => {
 	const [attemptedConnect, setAttemptedConnect] = React.useState(false);
 	const [isFetchingNetworks, setIsFetchingNetworks] = React.useState(true);
+	const [RestartingApp, setRestartingApp] = React.useState(false);
 	const [error, setError] = React.useState('');
 	const [availableNetworks, setAvailableNetworks] = React.useState<Network[]>(
 		[],
@@ -78,10 +86,32 @@ const App = () => {
 			});
 	};
 
+	const RestartApp = () => {
+		setRestartingApp(true);
+		setError('');
+
+		fetch('/restart', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+			},
+		})
+			.then((resp) => {
+				if (resp.status !== 200) {
+					throw new Error(resp.statusText);
+				}
+			})
+			.catch((e: Error) => {
+				setError(`Failed to restart. ${e.message || e}`);
+			});
+	};
+
 	return (
 		<Provider>
 			<GlobalStyle />
-			<Navbar brand={<img src={logo} style={{ height: 30 }} alt="logo" />} />
+			<StyledNavbar
+				brand={<img src={logo} style={{ height: 50 }} alt="logo" />}
+			/>
 
 			<Container>
 				<Notifications
@@ -89,11 +119,13 @@ const App = () => {
 					hasAvailableNetworks={
 						isFetchingNetworks || availableNetworks.length > 0
 					}
+					RestartingApp={RestartingApp}
 					error={error}
 				/>
 				<NetworkInfoForm
 					availableNetworks={availableNetworks}
 					onSubmit={onConnect}
+					onRestartButtonClick={RestartApp}
 				/>
 			</Container>
 		</Provider>

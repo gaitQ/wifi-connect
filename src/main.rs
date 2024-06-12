@@ -9,9 +9,7 @@ extern crate error_chain;
 #[macro_use]
 extern crate serde_derive;
 
-#[macro_use]
 extern crate clap;
-
 extern crate env_logger;
 extern crate iron;
 extern crate iron_cors;
@@ -36,13 +34,14 @@ mod server;
 use std::io::Write;
 use std::path;
 use std::process;
-use std::sync::mpsc::channel;
 use std::thread;
 
 use config::get_config;
+use std::sync::mpsc::channel;
 use errors::*;
 use exit::block_exit_signals;
-use network::{init_networking, process_network_commands};
+use exit::ExitEvent;
+use network::{network_init, network_thread};
 use privileges::require_root;
 
 fn main() {
@@ -65,24 +64,43 @@ fn run() -> Result<()> {
 
     logger::init();
 
-    let config = get_config();
-
     require_root()?;
 
-    init_networking(&config)?;
-
+    // Channels to signal exit events across threads
     let (exit_tx, exit_rx) = channel();
 
-    thread::spawn(move || {
-        process_network_commands(&config, &exit_tx);
+    // Starts network manger & deletes current AP
+    network_init(&get_config())?;
+
+    let config = get_config();
+
+    let network_thread_handle = thread::spawn(move || {
+        network_thread(&config, &exit_tx);
     });
 
+    // Blocks unit a thread send an exit event
     match exit_rx.recv() {
-        Ok(result) => result?,
+        Ok(result) => match result {
+            Ok(event) => match event {
+                ExitEvent::ExitSignal => info!("Exiting: Signal"),
+                ExitEvent::InternetConnected => info!("Exiting: Internet connected"),
+                ExitEvent::WiFiConnected => info!("Exiting: WiFi connected"),
+                ExitEvent::Timeout => info!("Exiting: Timeout"),
+                ExitEvent::UnexpectedExit => info!("Exiting: Unexpectedly"),
+            },
+            Err(e) => {
+                error!("Exiting: Error {}", e.to_string());
+                return Err(e.into());
+            }
+        },
         Err(e) => {
-            return Err(e.into());
+            error!("Exiting: Receive Error {}", e.to_string());
+            return Err(e.to_string().into());
         }
     }
+
+    // Join the network thread to ensure it completes gracefully
+    let _ = network_thread_handle.join();
 
     Ok(())
 }

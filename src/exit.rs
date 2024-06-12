@@ -1,10 +1,17 @@
 use std::sync::mpsc::Sender;
-
 use nix::sys::signal::{SigSet, SIGHUP, SIGINT, SIGQUIT, SIGTERM};
 
 use errors::*;
 
-pub type ExitResult = Result<()>;
+pub enum ExitEvent {
+    ExitSignal,
+    Timeout,
+    WiFiConnected,
+    InternetConnected,
+    UnexpectedExit,
+}
+
+pub type ExitResult = Result<ExitEvent>;
 
 pub fn exit(exit_tx: &Sender<ExitResult>, error: Error) {
     let _ = exit_tx.send(Err(error));
