@@ -53,6 +53,28 @@ struct NetworkCommandHandler {
     portal_active: bool,
 }
 
+fn check_dnsmasq_running(child: &mut process::Child) -> Result<()> {
+    // Wait for 1 second
+    thread::sleep(Duration::from_secs(1));
+
+    // Check if the process is still running
+    match child.try_wait() {
+        Ok(Some(status)) if !status.success() => {
+            Err(ErrorKind::Dnsmasq.into())
+        }
+        Ok(Some(_)) => {
+            Err(ErrorKind::Dnsmasq.into())
+        }
+        Ok(None) => {
+            // Process is still running
+            Ok(())
+        }
+        Err(e) => {
+            Err(e.into())
+        }
+    }
+}
+
 impl NetworkCommandHandler {
     pub fn new(config: &Config, exit_tx: &Sender<ExitResult>) -> Result<Self> {
         // Thread channels
@@ -64,9 +86,11 @@ impl NetworkCommandHandler {
         let device = find_device(&manager, &config.interface)?;
         let access_points = get_access_points(&device)?;
         let portal_connection = Some(create_portal(&device, config)?);
-        let dnsmasq = start_dnsmasq(config, &device)?;
+        let mut dnsmasq = start_dnsmasq(config, &device)?;
         let portal_active = false;
 
+        check_dnsmasq_running(&mut dnsmasq)?;
+    
         // Spawn other threads
         Self::spawn_trap_exit_signals(&exit_tx, network_tx.clone());
         Self::spawn_server(config, &exit_tx, server_rx, network_tx.clone());
@@ -278,7 +302,10 @@ pub fn network_thread(config: &Config, exit_tx: &Sender<ExitResult>) {
 pub fn network_thread_impl(config: &Config, exit_tx: &Sender<ExitResult>) -> Result<()> {
     let mut command_handler = match NetworkCommandHandler::new(config, exit_tx) {
         Ok(command_handler) => command_handler,
-        Err(e) => return Err(e),
+        Err(e) => {
+            error!("Failed to create NetworkCommandHandler");
+            return Err(e);
+        }
     };
 
     loop {
