@@ -20,7 +20,7 @@ inputs:
 runs:
   # https://docs.github.com/en/actions/creating-actions/creating-a-composite-action
   using: "composite"
-  steps:    
+  steps:
     - name: Setup Node.js
       uses: actions/setup-node@v3
       with:

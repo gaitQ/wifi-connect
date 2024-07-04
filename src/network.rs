@@ -90,7 +90,7 @@ impl NetworkCommandHandler {
         let portal_active = false;
 
         check_dnsmasq_running(&mut dnsmasq)?;
-    
+
         // Spawn other threads
         Self::spawn_trap_exit_signals(&exit_tx, network_tx.clone());
         Self::spawn_server(config, &exit_tx, server_rx, network_tx.clone());
@@ -206,7 +206,7 @@ impl NetworkCommandHandler {
             .send(NetworkCommandResponse::Networks(networks))
             .chain_err(|| ErrorKind::SendAccessPointSSIDs)
     }
-    
+
     fn stop_portal(&mut self) -> Result<()> {
         self.stop_portal_impl()
             .chain_err(|| ErrorKind::StopAccessPoint)
