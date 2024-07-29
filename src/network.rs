@@ -230,7 +230,7 @@ impl NetworkCommandHandler {
     }
 
     fn connect_to_wifi(&mut self, ssid: &str, identity: &str, passphrase: &str) -> Result<()> {
-        delete_existing_connections_to_same_network(&self.manager, ssid);
+        delete_existing_wifi_connections(&self.manager);
 
         self.stop_portal()?;
 
@@ -617,7 +617,7 @@ fn delete_existing_wifi_connect_ap_profile(ssid: &str) -> Result<()> {
     Ok(())
 }
 
-fn delete_existing_connections_to_same_network(manager: &NetworkManager, ssid: &str) {
+fn delete_existing_wifi_connections(manager: &NetworkManager) {
     let connections = match manager.get_connections() {
         Ok(connections) => connections,
         Err(e) => {
@@ -627,9 +627,9 @@ fn delete_existing_connections_to_same_network(manager: &NetworkManager, ssid: &
     };
 
     for connection in &connections {
-        if is_wifi_connection(connection) && is_same_ssid(connection, ssid) {
+        if is_wifi_connection(connection) && !is_access_point_connection(connection) {
             info!(
-                "Deleting existing WiFi connection to the same network: {:?}",
+                "Deleting existing WiFi connection: {:?}",
                 connection.settings().ssid,
             );
 
