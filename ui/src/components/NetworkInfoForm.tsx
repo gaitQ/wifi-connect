@@ -8,7 +8,7 @@ const getSchema = (availableNetworks: Network[]): JSONSchema => ({
 	type: 'object',
 	properties: {
 		ssid: {
-			title: 'SSID',
+			title: 'WiFi network name (SSID)',
 			type: 'string',
 			default: availableNetworks[0]?.ssid,
 			oneOf: availableNetworks.map((network) => ({
@@ -22,7 +22,7 @@ const getSchema = (availableNetworks: Network[]): JSONSchema => ({
 			default: '',
 		},
 		passphrase: {
-			title: 'Passphrase',
+			title: 'Password',
 			type: 'string',
 			default: '',
 		},
@@ -32,7 +32,7 @@ const getSchema = (availableNetworks: Network[]): JSONSchema => ({
 
 const getUiSchema = (isEnterprise: boolean): RenditionUiSchema => ({
 	ssid: {
-		'ui:placeholder': 'Select SSID',
+		'ui:placeholder': 'Select WiFi Network',
 		'ui:options': {
 			emphasized: true,
 		},
@@ -87,14 +87,14 @@ export const NetworkInfoForm = ({
 			m={4}
 			mt={5}
 		>
+			<Heading.h2 align="center" mb={4}>
+				Please choose your WiFi network from the list
+			</Heading.h2>
 			<Heading.h3 align="center" mb={4}>
-				Please choose your WiFi from the list
+				If your WiFi network is not shown in the list, ensure your router is turned on
+				and in range. Then Press the button 'Reload WiFi network list'. You will
+				have to reconnect to the Data Hub WiFi again (gaitq-data-hub-*).
 			</Heading.h3>
-			<Heading.h4 align="center" mb={4}>
-				If your WiFi is not shown in the list, ensure your router is turned on
-				and in range. Then Press the button below to reload the list. You will
-				have to reconnect to the gaitq-ded-* WiFi again.
-			</Heading.h4>
 			<Button
 				onClick={onRestartButtonClick}
 				mb={4}
@@ -104,7 +104,7 @@ export const NetworkInfoForm = ({
 					border: '0',
 				}}
 			>
-				Reload WiFi List
+				Reload WiFi network list
 			</Button>
 
 			<Form

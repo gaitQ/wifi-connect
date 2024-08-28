@@ -10,8 +10,7 @@ const GlobalStyle = createGlobalStyle`
 	body {
 		margin: 0;
 		font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-			'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-			sans-serif;
+		'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',sans-serif;
 		-webkit-font-smoothing: antialiased;
 		-moz-osx-font-smoothing: grayscale;
 	}
@@ -19,6 +18,15 @@ const GlobalStyle = createGlobalStyle`
 	code {
 		font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
 	}
+
+	button,
+	span,
+	label,
+	#root_ssid__input,
+	#root_passphrase {
+		font-size: large !important;
+	}
+}
 `;
 
 // Set colors for Navbar component
@@ -58,7 +66,7 @@ const App = () => {
 			})
 			.then(setAvailableNetworks)
 			.catch((e: Error) => {
-				setError(`Failed to fetch available networks. ${e.message || e}`);
+				setError(`Failed to fetch available networks (${e.message || e}).`);
 			})
 			.finally(() => {
 				setIsFetchingNetworks(false);
@@ -82,7 +90,7 @@ const App = () => {
 				}
 			})
 			.catch((e: Error) => {
-				setError(`Failed to connect to the network. ${e.message || e}`);
+				setError(`Failed to connect to the network (${e.message || e}).`);
 			});
 	};
 
@@ -102,7 +110,7 @@ const App = () => {
 				}
 			})
 			.catch((e: Error) => {
-				setError(`Failed to restart. ${e.message || e}`);
+				setError(`Failed to restart (${e.message || e}).`);
 			});
 	};
 
